@@ -1,0 +1,40 @@
+name = "rc-balance"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+
+[durable_objects]
+bindings = [{ name = "ROUTER", class_name = "RouterDO" }]
+
+# Refresh subscription snapshots every minute.
+[triggers]
+crons = ["* * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "REPLACE_DATABASE_NAME"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+[vars]
+# NOTE: These are plain-text vars (not secrets).
+# Put your JSON into a TOML multi-line string for easier editing.
+RC_BALANCE_CONFIG = '''
+{
+  "accounts": [
+    {
+      "label": "acc1",
+      "jwt": "YOUR_JWT_1",
+      "token": "YOUR_TOKEN_1",
+      "concurrency": 10
+    }
+  ],
+  "routingMode": "drain-first",
+  "subscriptionRefreshMs": 60000,
+  "promptCacheKeyTtlMs": 3600000,
+  "cooldown429Ms": 60000
+}
+'''
+RC_BALANCE_PROXY_TOKEN = "REPLACE_WITH_YOUR_PROXY_TOKEN"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RouterDO"]

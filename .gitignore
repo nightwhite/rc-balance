@@ -1,0 +1,24 @@
+reference
+helloagents
+
+# Node / tooling
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Wrangler / Workers build artifacts
+.wrangler/
+.wrangler-dist/
+
+# Project-specific Wrangler config (keep local, do not commit)
+wrangler.toml
+wrangler.toml.*
+!wrangler.toml.example
+
+# Local secrets (Wrangler dotenv-style vars)
+.dev.vars
+.dev.vars.*
+
+# OS cruft
+.DS_Store

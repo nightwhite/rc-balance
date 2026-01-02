@@ -1,0 +1,15 @@
+{
+    "cSpell.words": [
+        "dotenv",
+        "helloagents"
+    ],
+    "cSpell.ignorePaths": [
+        "**/reference/**"
+    ],
+    "search.exclude": {
+        "**/reference/**": true
+    },
+    "files.watcherExclude": {
+        "**/reference/**": true
+    }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "rc-balance",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "db:migrate:remote": "CI=1 wrangler d1 migrations apply DB --remote",
+    "deploy": "npm run db:migrate:remote && wrangler deploy --config wrangler.toml",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260101.0",
+    "typescript": "^5.7.3",
+    "wrangler": "^4.56.0"
+  }
+}
