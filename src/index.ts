@@ -69,6 +69,48 @@ function parseRouteKeyFromBody(parsed: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function normalizeResponsesInput(value: unknown): unknown[] | undefined {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    return [
+      {
+        role: "user",
+        content: [{ type: "input_text", text: value }],
+      },
+    ];
+  }
+  return undefined;
+}
+
+function sanitizeResponsesRequestBody(value: unknown): { json: unknown; changed: boolean } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return { json: value, changed: false };
+
+  const clone: Record<string, unknown> = { ...(value as Record<string, unknown>) };
+  let changed = false;
+
+  const normalizedInput = normalizeResponsesInput(clone.input);
+  if (normalizedInput) {
+    clone.input = normalizedInput;
+    changed = true;
+  }
+
+  const instructions = typeof clone.instructions === "string" ? clone.instructions : undefined;
+  if (instructions && instructions.trim()) {
+    const input = Array.isArray(clone.input) ? (clone.input as unknown[]) : [];
+    clone.input = [
+      {
+        role: "developer",
+        content: [{ type: "input_text", text: instructions }],
+      },
+      ...input,
+    ];
+    delete clone.instructions;
+    changed = true;
+  }
+
+  return { json: clone, changed };
+}
+
 function parseRouteKeyFromHeaders(headers: Headers): string | undefined {
   // Some clients (e.g. Codex integrations) may send a stable conversation/session id as a header.
   // We use it only for our own routing (do not forward / do not rewrite body).
@@ -314,7 +356,12 @@ export default {
     }
 
     const routeKey = parseRouteKeyFromBody(bodyJson) ?? parseRouteKeyFromHeaders(request.headers);
-    const upstreamBodyText = rawBodyText;
+    const upstreamBodyText = (() => {
+      if (!isResponses) return rawBodyText;
+      if (!bodyJson) return rawBodyText;
+      const { json, changed } = sanitizeResponsesRequestBody(bodyJson);
+      return changed ? JSON.stringify(json) : rawBodyText;
+    })();
 
     const stub = env.ROUTER.get(env.ROUTER.idFromName("router"));
     const excludedAccountIds = new Set<string>();
