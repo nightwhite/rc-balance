@@ -20,7 +20,6 @@
     { "label": "工作", "jwt": "YOUR_JWT_1", "token": "YOUR_TOKEN_1", "concurrency": 10 },
     { "label": "个人", "jwt": "YOUR_JWT_2", "token": "YOUR_TOKEN_2", "concurrency": 10 }
   ],
-  "routingMode": "drain-first",
   "subscriptionRefreshMs": 60000,
   "promptCacheKeyTtlMs": 3600000
 }
@@ -32,7 +31,6 @@
 - `token`: 用于调用 `https://www.right.codes/codex/v1/responses` 的密钥（Worker 会代你转发）
 
 可选字段（都有默认值）：
-- `routingMode`: `"drain-first"`（默认）或 `"cache-first"`
 - `upstreamBaseUrl`: 默认 `https://www.right.codes`
 - `upstreamResponsesPath`: 默认 `/codex/v1/responses`（RightCode 侧）
 - `subscriptionListUrl`: 默认 `https://right.codes/subscriptions/list`

@@ -263,25 +263,17 @@ export class RouterDO implements DurableObject {
       }
     }
 
-    const hasUnreset = candidates.some((c) => c.subscription && c.subscription.resetToday === false);
-    const drainFirst = this.config.routingMode === "drain-first";
-
     let chosen: { account: RcAccountConfig; remaining: number | undefined; inflight: number } | undefined;
 
-    if (drainFirst && hasUnreset) {
-      const drainAccountId = await this.pickOrUpdateDrainAccountId(candidates);
-      const drain = usable.find((c) => c.account.label === drainAccountId);
-      if (drain) {
-        chosen = drain;
-      }
-
-      if (!chosen) {
-        const otherUnreset = usable
-          .filter((c) => c.subscription && c.subscription.resetToday === false)
-          .sort((a, b) => compareConfigOrder(this.accountOrder, a.account.label, b.account.label))[0];
-        if (otherUnreset) {
-          chosen = otherUnreset;
-        }
+    // Single routing policy:
+    // 1) If there are any unreset accounts (resetToday=false), prefer draining them to reset (closest-to-reset first).
+    // 2) Once all accounts are resetToday=true, prefer the account with the most remaining quota.
+    const unresetUsable = usable.filter((c) => c.subscription && c.subscription.resetToday === false);
+    if (unresetUsable.length > 0) {
+      const drainAccountId = await this.pickOrUpdateDrainAccountId(unresetUsable);
+      if (drainAccountId) {
+        const drain = unresetUsable.find((c) => c.account.label === drainAccountId);
+        if (drain) chosen = drain;
       }
     }
 
@@ -307,17 +299,25 @@ export class RouterDO implements DurableObject {
   }
 
   private async pickOrUpdateDrainAccountId(
-    candidates: Array<{ account: RcAccountConfig; subscription?: SubscriptionSummary }>,
-  ): Promise<string> {
+    unresetUsable: Array<{ account: RcAccountConfig; remaining: number | undefined; inflight: number }>,
+  ): Promise<string | undefined> {
+    if (unresetUsable.length === 0) return undefined;
+
     const existing = await this.state.storage.get<string>("drainAccountId");
     if (existing) {
-      const stillUnreset = candidates.some((c) => c.account.label === existing && c.subscription?.resetToday === false);
-      if (stillUnreset) return existing;
+      const stillUsable = unresetUsable.some((c) => c.account.label === existing);
+      if (stillUsable) return existing;
     }
 
-    const next = [...candidates]
-      .filter((c) => c.subscription?.resetToday === false)
-      .sort((a, b) => compareConfigOrder(this.accountOrder, a.account.label, b.account.label))[0];
+    // Pick the account closest to reset first (smallest remaining quota).
+    // If remaining is unavailable, treat it as "farther" from reset.
+    const next = [...unresetUsable].sort((a, b) => {
+      const remainingA = a.remaining ?? Infinity;
+      const remainingB = b.remaining ?? Infinity;
+      if (remainingA !== remainingB) return remainingA - remainingB;
+      if (a.inflight !== b.inflight) return a.inflight - b.inflight;
+      return compareConfigOrder(this.accountOrder, a.account.label, b.account.label);
+    })[0];
 
     if (next) {
       await this.state.storage.put("drainAccountId", next.account.label);
@@ -325,7 +325,7 @@ export class RouterDO implements DurableObject {
     }
 
     await this.state.storage.delete("drainAccountId");
-    return candidates[0]?.account.label ?? this.accountOrder[0]!;
+    return undefined;
   }
 
   private async getPinnedAccount(routeKey: string): Promise<PinRecord | undefined> {

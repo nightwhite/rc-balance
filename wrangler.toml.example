@@ -27,7 +27,6 @@ RC_BALANCE_CONFIG = '''
       "concurrency": 10
     }
   ],
-  "routingMode": "drain-first",
   "subscriptionRefreshMs": 60000,
   "promptCacheKeyTtlMs": 3600000,
   "cooldown429Ms": 60000

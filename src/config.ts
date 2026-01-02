@@ -5,11 +5,8 @@ export type RcAccountConfig = {
   concurrency: number;
 };
 
-export type RoutingMode = "drain-first" | "cache-first";
-
 export type RcBalanceConfig = {
   accounts: RcAccountConfig[];
-  routingMode: RoutingMode;
   upstreamBaseUrl: string;
   upstreamResponsesPath: string;
   upstreamChatCompletionsPath: string;
@@ -159,12 +156,6 @@ export function loadConfig(env: Record<string, unknown>): RcBalanceConfig {
     throw new Error("RC_BALANCE_CONFIG must contain at least one account");
   }
 
-  const routingMode =
-    (isRecord(parsed) ? (parseString(parsed.routingMode ?? parsed.routing_mode) as RoutingMode | undefined) : undefined) ??
-    "drain-first";
-  const normalizedRoutingMode: RoutingMode =
-    routingMode === "cache-first" || routingMode === "drain-first" ? routingMode : "drain-first";
-
   const upstreamBaseUrl =
     (isRecord(parsed) ? parseString(parsed.upstreamBaseUrl ?? parsed.upstream_base_url) : undefined) ??
     "https://www.right.codes";
@@ -197,7 +188,6 @@ export function loadConfig(env: Record<string, unknown>): RcBalanceConfig {
 
   return {
     accounts,
-    routingMode: normalizedRoutingMode,
     upstreamBaseUrl: upstreamBaseUrl.replace(/\/+$/, ""),
     upstreamResponsesPath,
     upstreamChatCompletionsPath,

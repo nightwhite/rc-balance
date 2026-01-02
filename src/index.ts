@@ -273,7 +273,6 @@ export default {
             count: config.accounts.length,
             totalConcurrency: config.accounts.reduce((sum, account) => sum + account.concurrency, 0),
           },
-          routingMode: config.routingMode,
           subscriptionRefreshMs: config.subscriptionRefreshMs,
           promptCacheKeyTtlMs: config.promptCacheKeyTtlMs,
         });
