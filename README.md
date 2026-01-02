@@ -88,6 +88,10 @@ npx wrangler d1 execute DB --remote --command "SELECT ts, kind, account_label, u
 如果你设置了 `RC_BALANCE_PROXY_TOKEN`，调用时需要带：
 `Authorization: Bearer <RC_BALANCE_PROXY_TOKEN>`
 
+### 1.1) 代理 `POST /v1/chat/completions`
+
+把你原本请求 `https://www.right.codes/codex/v1/chat/completions` 的 host 换成你的 Worker 域名，并将 path 改为 `/v1/chat/completions` 即可（支持 `stream: true`）。
+
 ### 2) `prompt_cache_key` 粘性路由
 
 本服务的“routeKey”来源：

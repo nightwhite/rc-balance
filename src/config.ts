@@ -12,6 +12,7 @@ export type RcBalanceConfig = {
   routingMode: RoutingMode;
   upstreamBaseUrl: string;
   upstreamResponsesPath: string;
+  upstreamChatCompletionsPath: string;
   subscriptionListUrl: string;
   subscriptionRefreshMs: number;
   promptCacheKeyTtlMs: number;
@@ -170,6 +171,9 @@ export function loadConfig(env: Record<string, unknown>): RcBalanceConfig {
   const upstreamResponsesPath =
     (isRecord(parsed) ? parseString(parsed.upstreamResponsesPath ?? parsed.upstream_responses_path) : undefined) ??
     "/codex/v1/responses";
+  const upstreamChatCompletionsPath =
+    (isRecord(parsed) ? parseString(parsed.upstreamChatCompletionsPath ?? parsed.upstream_chat_completions_path) : undefined) ??
+    "/codex/v1/chat/completions";
   const subscriptionListUrl =
     (isRecord(parsed) ? parseString(parsed.subscriptionListUrl ?? parsed.subscription_list_url) : undefined) ??
     "https://right.codes/subscriptions/list";
@@ -196,6 +200,7 @@ export function loadConfig(env: Record<string, unknown>): RcBalanceConfig {
     routingMode: normalizedRoutingMode,
     upstreamBaseUrl: upstreamBaseUrl.replace(/\/+$/, ""),
     upstreamResponsesPath,
+    upstreamChatCompletionsPath,
     subscriptionListUrl,
     subscriptionRefreshMs,
     promptCacheKeyTtlMs,

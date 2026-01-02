@@ -286,9 +286,12 @@ export default {
       return new Response("Method not allowed", { status: 405 });
     }
 
-    // Proxy a single endpoint for drop-in compatibility with OpenAI-style routing.
-    // Default: POST /v1/responses
-    if (url.pathname !== "/v1/responses") {
+    // Proxy OpenAI-style endpoints.
+    // - POST /v1/responses
+    // - POST /v1/chat/completions
+    const isResponses = url.pathname === "/v1/responses";
+    const isChatCompletions = url.pathname === "/v1/chat/completions";
+    if (!isResponses && !isChatCompletions) {
       return new Response("Not found", { status: 404 });
     }
 
@@ -317,6 +320,8 @@ export default {
     const stub = env.ROUTER.get(env.ROUTER.idFromName("router"));
     const excludedAccountIds = new Set<string>();
     const maxAttempts = routeKey ? Math.max(1, config.accounts.length) : 1;
+
+    const upstreamPath = isChatCompletions ? config.upstreamChatCompletionsPath : config.upstreamResponsesPath;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       let selectResponse: Response;
@@ -372,8 +377,6 @@ export default {
       const accountId = typeof selected?.accountId === "string" ? selected.accountId : "";
       const leaseId = typeof selected?.leaseId === "string" ? selected.leaseId : "";
       const upstreamBaseUrl = typeof selected?.upstreamBaseUrl === "string" ? selected.upstreamBaseUrl : config.upstreamBaseUrl;
-      const upstreamResponsesPath =
-        typeof selected?.upstreamResponsesPath === "string" ? selected.upstreamResponsesPath : config.upstreamResponsesPath;
 
       const account = config.accounts.find((a) => a.label === accountId);
       const release = async () => {
@@ -392,7 +395,7 @@ export default {
         return jsonResponse({ error: "Invalid router selection" }, { status: 500 });
       }
 
-      const upstreamUrl = `${upstreamBaseUrl}${upstreamResponsesPath}`;
+      const upstreamUrl = `${upstreamBaseUrl}${upstreamPath}`;
       const headers = buildUpstreamHeaders(request, account.token);
 
       // Best-effort: preserve RightCode's SSE behavior.
