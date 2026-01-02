@@ -1,17 +1,19 @@
 import { loadConfig } from "./config";
-import { RouterDO } from "./router-do";
+import { RouterDOv2 } from "./router-do";
 import { fetchSubscriptionSummary, type SubscriptionSummary } from "./rightcode";
 
-export { RouterDO };
+export { RouterDOv2 };
 
 type Env = {
   ROUTER: DurableObjectNamespace;
   RC_BALANCE_CONFIG: string;
   RC_BALANCE_PROXY_TOKEN?: string;
+  RC_BALANCE_LOG_LEVEL?: string;
   DB: D1Database;
 };
 
 const MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024;
+const ROUTER_INSTANCE_NAME = "router";
 
 let cachedConfigRaw: string | undefined;
 let cachedConfig: ReturnType<typeof loadConfig> | undefined;
@@ -363,7 +365,7 @@ export default {
       return changed ? JSON.stringify(json) : rawBodyText;
     })();
 
-    const stub = env.ROUTER.get(env.ROUTER.idFromName("router"));
+    const stub = env.ROUTER.get(env.ROUTER.idFromName(ROUTER_INSTANCE_NAME));
     const excludedAccountIds = new Set<string>();
     const maxAttempts = routeKey ? Math.max(1, config.accounts.length) : 1;
 
@@ -381,6 +383,7 @@ export default {
           }),
         });
       } catch (error) {
+        console.error("Router select fetch failed：：：", error);
         const message = error instanceof Error ? error.message : String(error);
         ctx.waitUntil(
           logEvent(env, {

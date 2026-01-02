@@ -3,7 +3,7 @@ main = "src/index.ts"
 compatibility_date = "2026-01-01"
 
 [durable_objects]
-bindings = [{ name = "ROUTER", class_name = "RouterDO" }]
+bindings = [{ name = "ROUTER", class_name = "RouterDOv2" }]
 
 # Refresh subscription snapshots every minute.
 [triggers]
@@ -36,4 +36,4 @@ RC_BALANCE_PROXY_TOKEN = "REPLACE_WITH_YOUR_PROXY_TOKEN"
 
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["RouterDO"]
+new_sqlite_classes = ["RouterDOv2"]

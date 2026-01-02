@@ -59,6 +59,17 @@ function randomId(prefix: string): string {
   return `${prefix}${hex}`;
 }
 
+function describeError(error: unknown): { message: string; stack?: string } {
+  if (error instanceof Error) {
+    return { message: error.message, stack: error.stack };
+  }
+  try {
+    return { message: JSON.stringify(error) };
+  } catch {
+    return { message: String(error) };
+  }
+}
+
 function compareConfigOrder(order: string[], a: string, b: string): number {
   return order.indexOf(a) - order.indexOf(b);
 }
@@ -123,8 +134,16 @@ export class RouterDO implements DurableObject {
         }
         return jsonResponse(result.selection);
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown error";
-        return jsonResponse({ error: message }, { status: 500 });
+        const errorId = randomId("router_select_");
+        const info = describeError(error);
+        console.error("RouterDO /select failed", {
+          errorId,
+          message: info.message,
+          stack: info.stack,
+          excludeCount: excludeAccountIds.length,
+          hasRouteKey: Boolean(routeKey),
+        });
+        return jsonResponse({ error: "Internal router error", error_code: "router_select_failed", error_id: errorId }, { status: 500 });
       }
     }
 
@@ -564,3 +583,6 @@ export class RouterDO implements DurableObject {
     await this.state.storage.setAlarm(next);
   }
 }
+
+// v2 "fresh class" for isolating DO/SQLite state (same code, new storage namespace).
+export class RouterDOv2 extends RouterDO {}

@@ -2,10 +2,12 @@
   "name": "rc-balance",
   "private": true,
   "type": "module",
+  "packageManager": "bun@1.3.0",
   "scripts": {
     "dev": "wrangler dev",
+    "db:migrate:local": "CI=1 wrangler d1 migrations apply DB --local",
     "db:migrate:remote": "CI=1 wrangler d1 migrations apply DB --remote",
-    "deploy": "npm run db:migrate:remote && wrangler deploy --config wrangler.toml",
+    "deploy": "CI=1 wrangler d1 migrations apply DB --remote && wrangler deploy --config wrangler.toml",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

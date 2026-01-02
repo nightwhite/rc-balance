@@ -50,15 +50,15 @@
 
 ```bash
 # 创建远程 D1 数据库（示例：general）
-wrangler d1 create general
+bunx wrangler d1 create general
 
 # 初始化本地 D1（用于 wrangler dev）
-npx wrangler d1 execute DB --local --file=migrations/0001_rc_balance_init.sql
-npx wrangler d1 execute DB --local --file=migrations/0002_rc_balance_events.sql
+bunx wrangler d1 execute DB --local --file=migrations/0001_rc_balance_init.sql
+bunx wrangler d1 execute DB --local --file=migrations/0002_rc_balance_events.sql
 
 # 初始化远程 D1（生产/远程调试）
-npx wrangler d1 execute DB --remote --file=migrations/0001_rc_balance_init.sql
-npx wrangler d1 execute DB --remote --file=migrations/0002_rc_balance_events.sql
+bunx wrangler d1 execute DB --remote --file=migrations/0001_rc_balance_init.sql
+bunx wrangler d1 execute DB --remote --file=migrations/0002_rc_balance_events.sql
 ```
 
 然后把 `wrangler d1 create` 输出的 `database_id` 填入 `wrangler.toml`（本地不提交）或 `wrangler.toml.example`（示例）。
@@ -71,10 +71,10 @@ Worker 会把 failover/上游错误等事件异步写入 D1 表 `rc_balance_even
 
 ```bash
 # 本地
-npx wrangler d1 execute DB --local --command "SELECT ts, kind, account_label, upstream_status, route_key_hash, substr(detail,1,200) AS detail FROM rc_balance_events ORDER BY ts DESC LIMIT 50;"
+bunx wrangler d1 execute DB --local --command "SELECT ts, kind, account_label, upstream_status, route_key_hash, substr(detail,1,200) AS detail FROM rc_balance_events ORDER BY ts DESC LIMIT 50;"
 
 # 远程
-npx wrangler d1 execute DB --remote --command "SELECT ts, kind, account_label, upstream_status, route_key_hash, substr(detail,1,200) AS detail FROM rc_balance_events ORDER BY ts DESC LIMIT 50;"
+bunx wrangler d1 execute DB --remote --command "SELECT ts, kind, account_label, upstream_status, route_key_hash, substr(detail,1,200) AS detail FROM rc_balance_events ORDER BY ts DESC LIMIT 50;"
 ```
 
 ## 使用方式
@@ -108,9 +108,10 @@ npx wrangler d1 execute DB --remote --command "SELECT ts, kind, account_label, u
 ## 本地开发
 
 ```bash
-npm install
+bun install
 cp wrangler.toml.example wrangler.toml
-npm run dev
+bun run db:migrate:local
+bun run dev
 ```
 
 > `wrangler dev` 运行前需要提供 `RC_BALANCE_CONFIG`（建议直接写在 `wrangler.toml` 的 `[vars]`，或用 Dashboard 配置）。
@@ -121,7 +122,7 @@ npm run dev
 # 确保你本地有 `wrangler.toml`（不会提交到仓库）
 # 首次部署前需要先在 Cloudflare 创建 D1 数据库（`wrangler d1 create ...`），并将 `database_id` 填入 `wrangler.toml`
 # 部署时会自动执行远程 D1 migrations（`wrangler d1 migrations apply`，可重复执行，未应用的才会生效）
-npm run deploy
+bun run deploy
 ```
 
 如果你在免费计划上使用 Durable Objects，需要在 `wrangler.toml` 的 `[[migrations]]` 中使用 `new_sqlite_classes`（而不是 `new_classes`）。
