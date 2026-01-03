@@ -1,4 +1,5 @@
 import { loadConfig } from "./config";
+import { getEventLogLevel } from "./logging";
 import { RouterDOv2 } from "./router-do";
 import { fetchSubscriptionSummary, type SubscriptionSummary } from "./rightcode";
 
@@ -9,6 +10,7 @@ type Env = {
   RC_BALANCE_CONFIG: string;
   RC_BALANCE_PROXY_TOKEN?: string;
   RC_BALANCE_LOG_LEVEL?: string;
+  RC_BALANCE_EVENT_LOG_LEVEL?: string;
   DB: D1Database;
 };
 
@@ -84,7 +86,10 @@ function normalizeResponsesInput(value: unknown): unknown[] | undefined {
   return undefined;
 }
 
-function sanitizeResponsesRequestBody(value: unknown): { json: unknown; changed: boolean } {
+function sanitizeResponsesRequestBody(
+  value: unknown,
+  options?: { dropCodexCliInstructions?: boolean },
+): { json: unknown; changed: boolean } {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return { json: value, changed: false };
 
   const clone: Record<string, unknown> = { ...(value as Record<string, unknown>) };
@@ -96,21 +101,90 @@ function sanitizeResponsesRequestBody(value: unknown): { json: unknown; changed:
     changed = true;
   }
 
-  const instructions = typeof clone.instructions === "string" ? clone.instructions : undefined;
-  if (instructions && instructions.trim()) {
-    const input = Array.isArray(clone.input) ? (clone.input as unknown[]) : [];
-    clone.input = [
-      {
-        role: "developer",
-        content: [{ type: "input_text", text: instructions }],
-      },
-      ...input,
-    ];
+  const rawInstructions = typeof clone.instructions === "string" ? clone.instructions : undefined;
+  if (rawInstructions !== undefined) {
+    const trimmed = rawInstructions.trim();
+    if (trimmed) {
+      const includesCodexCli = trimmed.toLowerCase().includes("codex cli");
+      if (!includesCodexCli) {
+        const input = Array.isArray(clone.input) ? (clone.input as unknown[]) : [];
+        clone.input = [
+          {
+            role: "developer",
+            content: [{ type: "input_text", text: trimmed }],
+          },
+          ...input,
+        ];
+        delete clone.instructions;
+        changed = true;
+      } else if (options?.dropCodexCliInstructions) {
+        delete clone.instructions;
+        changed = true;
+      }
+    }
+    // If `instructions` includes "Codex CLI", keep the original field intact and do not inject it into `input`.
+    // Some Codex clients send a large default instruction block; we preserve it for compatibility.
+  } else if (clone.instructions !== undefined) {
     delete clone.instructions;
     changed = true;
   }
 
   return { json: clone, changed };
+}
+
+function redactEventRequestBody(bodyText: string): string | undefined {
+  const trimmed = bodyText.trim();
+  if (!trimmed) return undefined;
+
+  try {
+    const parsed = JSON.parse(bodyText) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return bodyText;
+
+    const clone: Record<string, unknown> = { ...(parsed as Record<string, unknown>) };
+    const promptCacheKey = clone.prompt_cache_key;
+    if (typeof promptCacheKey === "string" && promptCacheKey.trim()) {
+      clone.prompt_cache_key = "[redacted]";
+    }
+
+    return JSON.stringify(clone);
+  } catch {
+    return bodyText;
+  }
+}
+
+function redactEventHeaders(headers: Headers): string | undefined {
+  const result: Record<string, string> = {};
+  const redactKeys = new Set([
+    "authorization",
+    "cookie",
+    "set-cookie",
+    "x-api-key",
+    "x-openai-api-key",
+    "api-key",
+    "x-rc-route-key",
+    "x-prompt-cache-key",
+    "prompt_cache_key",
+    "conversation_id",
+    "session_id",
+  ]);
+
+  headers.forEach((value, key) => {
+    const normalizedKey = key.toLowerCase();
+    if (redactKeys.has(normalizedKey)) {
+      result[normalizedKey] = "[redacted]";
+      return;
+    }
+    result[normalizedKey] = value;
+  });
+
+  const keys = Object.keys(result);
+  if (keys.length === 0) return undefined;
+
+  try {
+    return JSON.stringify(result);
+  } catch {
+    return undefined;
+  }
 }
 
 function parseRouteKeyFromHeaders(headers: Headers): string | undefined {
@@ -166,6 +240,11 @@ function buildUpstreamHeaders(request: Request, accountToken: string): Headers {
   // Remove headers that should not be forwarded.
   headers.delete("content-length");
   headers.delete("host");
+  // These headers are used only for internal routing / telemetry; forwarding them can
+  // change upstream validation behavior (e.g. Codex originators).
+  for (const name of ["originator", "conversation_id", "session_id", "prompt_cache_key", "x-prompt-cache-key"]) {
+    headers.delete(name);
+  }
   for (const name of [
     "connection",
     "keep-alive",
@@ -198,6 +277,19 @@ function isEventStream(response: Response): boolean {
   return contentType.toLowerCase().startsWith("text/event-stream");
 }
 
+function isInstructionsValidationError(status: number, bodyText: string): boolean {
+  if (status !== 400) return false;
+  const trimmed = bodyText.trim();
+  if (!trimmed) return false;
+  try {
+    const parsed = JSON.parse(trimmed) as any;
+    const detail = typeof parsed?.detail === "string" ? parsed.detail : "";
+    return detail.includes("Instructions are not valid") || detail.includes("Instructions are required");
+  } catch {
+    return trimmed.includes("Instructions are not valid") || trimmed.includes("Instructions are required");
+  }
+}
+
 function randomId(prefix: string): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
@@ -220,6 +312,8 @@ async function logEvent(env: Env, event: {
   routeKey?: string;
   upstreamStatus?: number;
   detail?: string;
+  requestBody?: string;
+  requestHeaders?: string;
 }): Promise<void> {
   const ts = Date.now();
   const id = randomId("evt_");
@@ -227,11 +321,13 @@ async function logEvent(env: Env, event: {
   const accountLabel = event.accountLabel ?? null;
   const upstreamStatus = typeof event.upstreamStatus === "number" ? event.upstreamStatus : null;
   const detail = event.detail ?? null;
+  const requestBody = event.requestBody ?? null;
+  const requestHeaders = event.requestHeaders ?? null;
 
   await env.DB.prepare(
-    `INSERT INTO ${EVENTS_TABLE} (id, ts, kind, account_label, route_key_hash, upstream_status, detail)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).bind(id, ts, event.kind, accountLabel, routeKeyHash, upstreamStatus, detail).run();
+    `INSERT INTO ${EVENTS_TABLE} (id, ts, kind, account_label, route_key_hash, upstream_status, detail, request_body, request_headers)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(id, ts, event.kind, accountLabel, routeKeyHash, upstreamStatus, detail, requestBody, requestHeaders).run();
 }
 
 type SubscriptionSnapshotRecord = {
@@ -307,6 +403,8 @@ async function refreshSubscriptions(env: Env): Promise<void> {
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    const eventLogLevel = getEventLogLevel(env);
+    const logRequestsToD1 = eventLogLevel === "info";
 
     if (request.method === "GET" && url.pathname === "/health") {
       try {
@@ -339,6 +437,18 @@ export default {
     }
 
     if (!isAuthorized(request, env)) {
+      if (logRequestsToD1) {
+        const routeKey = parseRouteKeyFromHeaders(request.headers);
+        ctx.waitUntil(
+          logEvent(env, {
+            kind: "request",
+            routeKey,
+            upstreamStatus: 401,
+            detail: JSON.stringify({ path: url.pathname, authorized: false }),
+            requestHeaders: redactEventHeaders(request.headers),
+          }).catch(() => {}),
+        );
+      }
       return new Response("Unauthorized", { status: 401 });
     }
 
@@ -358,12 +468,35 @@ export default {
     }
 
     const routeKey = parseRouteKeyFromBody(bodyJson) ?? parseRouteKeyFromHeaders(request.headers);
-    const upstreamBodyText = (() => {
-      if (!isResponses) return rawBodyText;
-      if (!bodyJson) return rawBodyText;
-      const { json, changed } = sanitizeResponsesRequestBody(bodyJson);
-      return changed ? JSON.stringify(json) : rawBodyText;
+    const upstreamBodies = (() => {
+      if (!isResponses) return { primary: rawBodyText, fallback: rawBodyText };
+      if (!bodyJson) return { primary: rawBodyText, fallback: rawBodyText };
+      const primary = sanitizeResponsesRequestBody(bodyJson);
+      const fallback = sanitizeResponsesRequestBody(bodyJson, { dropCodexCliInstructions: true });
+      return {
+        primary: primary.changed ? JSON.stringify(primary.json) : rawBodyText,
+        fallback: fallback.changed ? JSON.stringify(fallback.json) : rawBodyText,
+      };
     })();
+    const eventRequestBody = redactEventRequestBody(upstreamBodies.primary);
+    const eventRequestHeaders = redactEventHeaders(request.headers);
+    const eventRequestDetail = JSON.stringify({ path: url.pathname, authorized: true });
+    let requestLogged = false;
+    const logRequestOnce = (params: { status: number; accountLabel?: string; detail?: string }) => {
+      if (!logRequestsToD1 || requestLogged) return;
+      requestLogged = true;
+      ctx.waitUntil(
+        logEvent(env, {
+          kind: "request",
+          accountLabel: params.accountLabel,
+          routeKey,
+          upstreamStatus: params.status,
+          detail: params.detail ?? eventRequestDetail,
+          requestBody: eventRequestBody,
+          requestHeaders: eventRequestHeaders,
+        }).catch(() => {}),
+      );
+    };
 
     const stub = env.ROUTER.get(env.ROUTER.idFromName(ROUTER_INSTANCE_NAME));
     const excludedAccountIds = new Set<string>();
@@ -390,8 +523,11 @@ export default {
             kind: "router_select_failed",
             routeKey,
             detail: message,
+            requestBody: eventRequestBody,
+            requestHeaders: eventRequestHeaders,
           }).catch(() => {}),
         );
+        logRequestOnce({ status: 503 });
         if (message.includes("No available accounts")) {
           return jsonResponse({ error: "No available accounts (all at concurrency limit or out of quota)" }, { status: 503 });
         }
@@ -415,10 +551,13 @@ export default {
             kind: "router_select_unavailable",
             routeKey,
             upstreamStatus: selectResponse.status,
-            detail: message.slice(0, 500),
+            detail: message,
+            requestBody: eventRequestBody,
+            requestHeaders: eventRequestHeaders,
           }).catch(() => {}),
         );
         const outwardStatus = selectResponse.status === 429 ? 503 : selectResponse.status;
+        logRequestOnce({ status: outwardStatus });
         return jsonResponse({ error: message || "No available accounts" }, { status: outwardStatus });
       }
 
@@ -441,6 +580,7 @@ export default {
 
       if (!account || !leaseId) {
         ctx.waitUntil(release());
+        logRequestOnce({ status: 500 });
         return jsonResponse({ error: "Invalid router selection" }, { status: 500 });
       }
 
@@ -453,7 +593,7 @@ export default {
         upstreamResponse = await fetch(upstreamUrl, {
           method: "POST",
           headers,
-          body: upstreamBodyText,
+          body: upstreamBodies.primary,
         });
       } catch (error) {
         ctx.waitUntil(release());
@@ -463,8 +603,11 @@ export default {
             accountLabel: accountId,
             routeKey,
             detail: error instanceof Error ? error.message : String(error),
+            requestBody: eventRequestBody,
+            requestHeaders: eventRequestHeaders,
           }).catch(() => {}),
         );
+        logRequestOnce({ status: 502, accountLabel: accountId });
         return jsonResponse(
           { error: "Upstream fetch failed", detail: error instanceof Error ? error.message : String(error) },
           { status: 502 },
@@ -493,6 +636,67 @@ export default {
       // - optionally failover to another account
       if (upstreamResponse.status >= 400 && !isEventStream(upstreamResponse)) {
         const text = await upstreamResponse.text();
+        if (
+          upstreamBodies.fallback !== upstreamBodies.primary &&
+          isInstructionsValidationError(upstreamResponse.status, text)
+        ) {
+          try {
+            upstreamResponse = await fetch(upstreamUrl, {
+              method: "POST",
+              headers,
+              body: upstreamBodies.fallback,
+            });
+          } catch (error) {
+            ctx.waitUntil(release());
+            ctx.waitUntil(
+              logEvent(env, {
+                kind: "upstream_fetch_failed",
+                accountLabel: accountId,
+                routeKey,
+                detail: error instanceof Error ? error.message : String(error),
+                requestBody: eventRequestBody,
+                requestHeaders: eventRequestHeaders,
+              }).catch(() => {}),
+            );
+            logRequestOnce({ status: 502, accountLabel: accountId });
+            return jsonResponse(
+              { error: "Upstream fetch failed", detail: error instanceof Error ? error.message : String(error) },
+              { status: 502 },
+            );
+          }
+
+          // Retry succeeded (or failed) with a potentially different response type/status.
+          if (upstreamResponse.ok && isEventStream(upstreamResponse) && upstreamResponse.body) {
+            const downstreamHeaders = new Headers(upstreamResponse.headers);
+            const { readable, writable } = new TransformStream();
+            ctx.waitUntil(
+              upstreamResponse.body
+                .pipeTo(writable, { signal: request.signal })
+                .catch(() => {})
+                .finally(release),
+            );
+            logRequestOnce({ status: upstreamResponse.status, accountLabel: accountId });
+            return new Response(readable, { status: upstreamResponse.status, headers: downstreamHeaders });
+          }
+          // Continue with the normal error-path handling using the retried response.
+          if (!isEventStream(upstreamResponse)) {
+            const retryText = await upstreamResponse.text();
+            ctx.waitUntil(
+              logEvent(env, {
+                kind: "upstream_error",
+                accountLabel: accountId,
+                routeKey,
+                upstreamStatus: upstreamResponse.status,
+                detail: retryText,
+                requestBody: redactEventRequestBody(upstreamBodies.fallback),
+                requestHeaders: eventRequestHeaders,
+              }).catch(() => {}),
+            );
+            ctx.waitUntil(release());
+            logRequestOnce({ status: upstreamResponse.status, accountLabel: accountId });
+            return jsonResponse({ error: "Upstream error" }, { status: upstreamResponse.status });
+          }
+        }
         const insufficientBalance = (() => {
           try {
             const parsed = JSON.parse(text) as any;
@@ -513,7 +717,9 @@ export default {
               accountLabel: accountId,
               routeKey,
               upstreamStatus: upstreamResponse.status,
-              detail: text.slice(0, 500),
+              detail: text,
+              requestBody: eventRequestBody,
+              requestHeaders: eventRequestHeaders,
             }).catch(() => {}),
           );
         } else {
@@ -523,7 +729,9 @@ export default {
               accountLabel: accountId,
               routeKey,
               upstreamStatus: upstreamResponse.status,
-              detail: text.slice(0, 500),
+              detail: text,
+              requestBody: eventRequestBody,
+              requestHeaders: eventRequestHeaders,
             }).catch(() => {}),
           );
         }
@@ -535,6 +743,7 @@ export default {
         }
 
         ctx.waitUntil(release());
+        logRequestOnce({ status: upstreamResponse.status, accountLabel: accountId });
         // Do not leak upstream raw error payloads to clients; keep status code as-is for compatibility.
         const clientMessage = insufficientBalance ? "余额不足" : "Upstream error";
         return jsonResponse({ error: clientMessage }, { status: upstreamResponse.status });
@@ -549,6 +758,8 @@ export default {
             accountLabel: accountId,
             routeKey,
             upstreamStatus: upstreamResponse.status,
+            requestBody: eventRequestBody,
+            requestHeaders: eventRequestHeaders,
           }).catch(() => {}),
         );
         upstreamResponse.body?.cancel().catch(() => {});
@@ -566,10 +777,13 @@ export default {
               accountLabel: accountId,
               routeKey,
               upstreamStatus: upstreamResponse.status,
-              detail: text.slice(0, 500),
+              detail: text,
+              requestBody: eventRequestBody,
+              requestHeaders: eventRequestHeaders,
             }).catch(() => {}),
           );
         }
+        logRequestOnce({ status: upstreamResponse.status, accountLabel: accountId });
         return new Response(text, { status: upstreamResponse.status, headers: downstreamHeaders });
       }
 
@@ -588,13 +802,17 @@ export default {
             accountLabel: accountId,
             routeKey,
             upstreamStatus: upstreamResponse.status,
+            requestBody: eventRequestBody,
+            requestHeaders: eventRequestHeaders,
           }).catch(() => {}),
         );
       }
 
+      logRequestOnce({ status: upstreamResponse.status, accountLabel: accountId });
       return new Response(readable, { status: upstreamResponse.status, headers: downstreamHeaders });
     }
 
+    logRequestOnce({ status: 503 });
     return jsonResponse({ error: "Failed to select an available account" }, { status: 503 });
   },
 

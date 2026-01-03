@@ -33,6 +33,7 @@ RC_BALANCE_CONFIG = '''
 }
 '''
 RC_BALANCE_PROXY_TOKEN = "REPLACE_WITH_YOUR_PROXY_TOKEN"
+RC_BALANCE_EVENT_LOG_LEVEL = "error"
 
 [[migrations]]
 tag = "v1"

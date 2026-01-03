@@ -41,6 +41,9 @@
 
 可选环境变量：
 - `RC_BALANCE_PROXY_TOKEN`: 若配置，则所有请求必须带 `Authorization: Bearer <token>`（用于保护你的 Worker，不把右侧账号 token 暴露给调用方）
+- `RC_BALANCE_EVENT_LOG_LEVEL`: D1 事件日志级别（默认 `error`）
+  - `error`: 仅写入报错/切换等事件（建议生产默认）
+  - `info`: 额外写入每个请求的 `request` 事件（会显著增加 D1 写入量）
 
 ## D1（订阅快照存储）
 
@@ -55,26 +58,34 @@ bunx wrangler d1 create general
 # 初始化本地 D1（用于 wrangler dev）
 bunx wrangler d1 execute DB --local --file=migrations/0001_rc_balance_init.sql
 bunx wrangler d1 execute DB --local --file=migrations/0002_rc_balance_events.sql
+bunx wrangler d1 execute DB --local --file=migrations/0003_rc_balance_events_request_body.sql
+bunx wrangler d1 execute DB --local --file=migrations/0004_rc_balance_events_request_headers.sql
 
 # 初始化远程 D1（生产/远程调试）
 bunx wrangler d1 execute DB --remote --file=migrations/0001_rc_balance_init.sql
 bunx wrangler d1 execute DB --remote --file=migrations/0002_rc_balance_events.sql
+bunx wrangler d1 execute DB --remote --file=migrations/0003_rc_balance_events_request_body.sql
+bunx wrangler d1 execute DB --remote --file=migrations/0004_rc_balance_events_request_headers.sql
 ```
 
 然后把 `wrangler d1 create` 输出的 `database_id` 填入 `wrangler.toml`（本地不提交）或 `wrangler.toml.example`（示例）。
 
 ## D1（事件日志）
 
-Worker 会把 failover/上游错误等事件异步写入 D1 表 `rc_balance_events`（不会写入 token 或原始 `prompt_cache_key`，只记录 hash）。
+Worker 会把 failover/上游错误等事件异步写入 D1 表 `rc_balance_events`：
+- 不会写入 token 或原始 `prompt_cache_key`（只记录 hash；`request_body` 会自动把 `prompt_cache_key` 打码）
+- `detail` 可能包含上游完整错误 body（用于排查报错）
+- `request_headers` 会记录请求头（自动打码 `Authorization/Cookie/prompt_cache_key` 等敏感字段）
+> 如需把每个请求都写入 D1，请将 `RC_BALANCE_EVENT_LOG_LEVEL=info`（会产生较多写入与存储）。
 
 查询示例：
 
 ```bash
 # 本地
-bunx wrangler d1 execute DB --local --command "SELECT ts, kind, account_label, upstream_status, route_key_hash, substr(detail,1,200) AS detail FROM rc_balance_events ORDER BY ts DESC LIMIT 50;"
+bunx wrangler d1 execute DB --local --command "SELECT ts, kind, account_label, upstream_status, route_key_hash, substr(request_headers,1,200) AS request_headers, substr(request_body,1,200) AS request_body, substr(detail,1,200) AS detail FROM rc_balance_events ORDER BY ts DESC LIMIT 50;"
 
 # 远程
-bunx wrangler d1 execute DB --remote --command "SELECT ts, kind, account_label, upstream_status, route_key_hash, substr(detail,1,200) AS detail FROM rc_balance_events ORDER BY ts DESC LIMIT 50;"
+bunx wrangler d1 execute DB --remote --command "SELECT ts, kind, account_label, upstream_status, route_key_hash, substr(request_headers,1,200) AS request_headers, substr(request_body,1,200) AS request_body, substr(detail,1,200) AS detail FROM rc_balance_events ORDER BY ts DESC LIMIT 50;"
 ```
 
 ## 使用方式
